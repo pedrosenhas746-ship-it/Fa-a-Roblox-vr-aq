@@ -10,6 +10,8 @@ on:
       - 'settings.gradle'
       - 'gradle.properties'
       - '.github/workflows/build-apk.yml'
+  pull_request:
+    branches: [ main ]
 
 permissions:
   contents: read
