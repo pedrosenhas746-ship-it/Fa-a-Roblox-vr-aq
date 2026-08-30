@@ -36,6 +36,17 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Hydrate verified MediaPipe hand model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets
+          curl -fL --retry 4 --retry-delay 2 \
+            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' \
+            -o app/src/main/assets/hand_landmarker.task
+          test "$(stat -c%s app/src/main/assets/hand_landmarker.task)" = "7819105"
+          echo 'fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1  app/src/main/assets/hand_landmarker.task' | sha256sum -c -
+
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
