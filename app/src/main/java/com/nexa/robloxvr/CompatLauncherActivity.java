@@ -63,19 +63,19 @@ public class CompatLauncherActivity extends ComponentActivity {
         root.setBackgroundColor(Color.rgb(8, 9, 13));
 
         TextView title = new TextView(this);
-        title.setText("NEXA ROBLOX XR v0.6");
+        title.setText("NEXA ROBLOX XR v0.7");
         title.setTextColor(Color.WHITE);
         title.setTextSize(27f);
         title.setGravity(Gravity.CENTER);
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("QUEST MODE + VRBOX COMPATIBILITY");
+        subtitle.setText("MOBILE VR ACTIVATION + QUEST MODE + VRBOX COMPAT");
         subtitle.setTextColor(Color.LTGRAY);
-        subtitle.setTextSize(14f);
+        subtitle.setTextSize(13f);
         subtitle.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-1, -2);
-        subLp.setMargins(0, 8, 0, 20);
+        subLp.setMargins(0, 8, 0, 18);
         root.addView(subtitle, subLp);
 
         status = new TextView(this);
@@ -83,8 +83,12 @@ public class CompatLauncherActivity extends ComponentActivity {
         status.setTextSize(14f);
         status.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(-1, -2);
-        statusLp.setMargins(0, 0, 0, 18);
+        statusLp.setMargins(0, 0, 0, 14);
         root.addView(status, statusLp);
+
+        Button mobileVr = button("TRY ROBLOX MOBILE VR ACTIVATION v0.7");
+        mobileVr.setOnClickListener(v -> startActivity(new Intent(this, MobileVrActivationActivity.class)));
+        root.addView(mobileVr, buttonLp());
 
         Button quest = button("QUEST / OPENXR MODE v0.6");
         quest.setOnClickListener(v -> startActivity(new Intent(this, QuestSetupActivity.class)));
@@ -103,12 +107,12 @@ public class CompatLauncherActivity extends ComponentActivity {
         root.addView(compat, buttonLp());
 
         TextView hint = new TextView(this);
-        hint.setText("Quest Mode requires a real VR/OpenXR Roblox build + an OpenXR runtime. Compat Mode works with the stock Mobile client on Android 14+.");
+        hint.setText("v0.7 tries only public Android entry points in the installed Roblox Mobile build. It does not patch or inject into Roblox. VRBox Compat remains the fallback on Android 14+.");
         hint.setTextColor(Color.LTGRAY);
-        hint.setTextSize(12f);
+        hint.setTextSize(11f);
         hint.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(-1, -2);
-        hintLp.setMargins(0, 18, 0, 0);
+        hintLp.setMargins(0, 14, 0, 0);
         root.addView(hint, hintLp);
         return root;
     }
@@ -116,46 +120,39 @@ public class CompatLauncherActivity extends ComponentActivity {
     private Button button(String text) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextSize(15f);
+        b.setTextSize(14f);
         b.setAllCaps(false);
         return b;
     }
 
     private LinearLayout.LayoutParams buttonLp() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 6, 0, 6);
+        lp.setMargins(0, 5, 0, 5);
         return lp;
     }
 
     private void ensureCameraAndTracking() {
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startTracking();
-        } else {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
-        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startTracking();
+        else requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_CAMERA && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startTracking();
-        }
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) startTracking();
         refreshStatus();
     }
 
     private void startTracking() {
         try {
-            if (!XrTrackingService.isRunning()) {
-                startForegroundService(new Intent(this, XrTrackingService.class));
-            }
+            if (!XrTrackingService.isRunning()) startForegroundService(new Intent(this, XrTrackingService.class));
         } catch (RuntimeException ignored) { }
     }
 
     private void startCompatMode() {
         if (Build.VERSION.SDK_INT < 34) {
-            status.setText("VRBOX COMPAT NEEDS ANDROID 14+ FOR SINGLE-APP CAPTURE (NO FEEDBACK LOOP).");
+            status.setText("VRBOX COMPAT NEEDS ANDROID 14+ FOR SINGLE-APP CAPTURE.");
             return;
         }
         if (!isRobloxInstalled()) {
@@ -174,8 +171,7 @@ public class CompatLauncherActivity extends ComponentActivity {
 
     private void beginCaptureConsent() {
         if (Build.VERSION.SDK_INT < 34) return;
-        MediaProjectionManager manager =
-                (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        MediaProjectionManager manager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         MediaProjectionConfig config = MediaProjectionConfig.createConfigForUserChoice();
         Intent capture = manager.createScreenCaptureIntent(config);
         status.setText("ANDROID DIALOG: SELECT 'A SINGLE APP' → ROBLOX");
@@ -190,7 +186,6 @@ public class CompatLauncherActivity extends ComponentActivity {
             status.setText("SCREEN CAPTURE WAS NOT GRANTED.");
             return;
         }
-
         startTracking();
         Intent service = new Intent(this, MirrorProjectionService.class);
         service.putExtra(MirrorProjectionService.EXTRA_RESULT_CODE, resultCode);
@@ -222,10 +217,8 @@ public class CompatLauncherActivity extends ComponentActivity {
     private boolean accessibilityEnabled() {
         ComponentName component = new ComponentName(this, CompatAccessibilityService.class);
         String expected = component.flattenToString();
-        String enabled = Settings.Secure.getString(getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        return enabled != null && (enabled.contains(expected)
-                || enabled.contains(component.flattenToShortString()));
+        String enabled = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        return enabled != null && (enabled.contains(expected) || enabled.contains(component.flattenToShortString()));
     }
 
     private void refreshStatus() {
