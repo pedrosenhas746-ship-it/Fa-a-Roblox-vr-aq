@@ -10,8 +10,8 @@ android {
         applicationId 'com.nexa.robloxvr'
         minSdk 26
         targetSdk 35
-        versionCode 7
-        versionName '0.7.0-mobile-vr-activation'
+        versionCode 8
+        versionName '0.7.1-miui-window-fix'
     }
 
     compileOptions {
