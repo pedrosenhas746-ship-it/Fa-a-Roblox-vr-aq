@@ -21,16 +21,13 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Non-invasive experiment for the stock Roblox Android client.
- *
- * It only uses Android-visible/exported Activities and Intent extras. It does not patch,
- * inject into, re-sign, hook, or alter Roblox. The goal is to exhaust the public launch
- * surface before concluding that the mobile build's internal isVrDevice=false gate cannot
- * be changed by a companion app.
+ * Non-invasive diagnostics for the stock Roblox Android client.
+ * Tests the real launcher first, then adds only a minimal set of VR hints.
  */
 public class MobileVrActivationActivity extends ComponentActivity {
     private static final String ROBLOX = RobloxVrProbe.ROBLOX_PACKAGE;
     private static final String ROBLOX_CLASS_PREFIX = "com.roblox.client.";
+
     private TextView status;
     private final List<ActivityInfo> exported = new ArrayList<>();
 
@@ -49,14 +46,14 @@ public class MobileVrActivationActivity extends ComponentActivity {
         body.setBackgroundColor(Color.rgb(8, 9, 13));
 
         TextView title = new TextView(this);
-        title.setText("NEXA MOBILE VR ACTIVATION v0.7.2");
+        title.setText("NEXA MOBILE VR DIAGNOSTICS v0.7.3");
         title.setTextColor(Color.WHITE);
         title.setTextSize(23f);
         title.setGravity(Gravity.CENTER);
         body.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView explain = new TextView(this);
-        explain.setText("Experimental: tries only public/exported Roblox Android launch paths. Third-party Play Games/ads/login Activities are ignored.");
+        explain.setText("First prove the normal Roblox launcher works. Then test only minimal VR hints. Tracking is kept separate so it cannot block the launch.");
         explain.setTextColor(Color.LTGRAY);
         explain.setTextSize(12f);
         explain.setGravity(Gravity.CENTER);
@@ -70,19 +67,23 @@ public class MobileVrActivationActivity extends ComponentActivity {
         status.setGravity(Gravity.CENTER_HORIZONTAL);
         body.addView(status, new LinearLayout.LayoutParams(-1, -2));
 
-        Button defaultLaunch = button("1 • TRY VR FLAGS ON DEFAULT ROBLOX");
-        defaultLaunch.setOnClickListener(v -> launchDefaultWithVrHints());
-        body.addView(defaultLaunch, buttonLp());
+        Button clean = button("1 • OPEN ROBLOX CLEAN (NO VR / NO TRACKING)");
+        clean.setOnClickListener(v -> launchClean());
+        body.addView(clean, buttonLp());
 
-        Button gameLaunch = button("2 • TRY ROBLOX-OWNED EXPORTED ACTIVITY");
-        gameLaunch.setOnClickListener(v -> launchBestExportedGameActivity());
-        body.addView(gameLaunch, buttonLp());
+        Button minimal = button("2 • TRY MINIMAL VR FLAGS (NO TRACKING)");
+        minimal.setOnClickListener(v -> launchMinimalVr(false));
+        body.addView(minimal, buttonLp());
 
-        Button plain = button("3 • OPEN ROBLOX NORMALLY (COMPARE)");
-        plain.setOnClickListener(v -> launchPlain());
-        body.addView(plain, buttonLp());
+        Button minimalTracking = button("3 • TRY MINIMAL VR FLAGS + NEXA TRACKING");
+        minimalTracking.setOnClickListener(v -> launchMinimalVr(true));
+        body.addView(minimalTracking, buttonLp());
 
-        Button refresh = button("REFRESH EXPORTED COMPONENTS");
+        Button direct = button("4 • TRY ROBLOX-OWNED EXPORTED ENTRY");
+        direct.setOnClickListener(v -> launchBestExportedGameActivity());
+        body.addView(direct, buttonLp());
+
+        Button refresh = button("REFRESH DIAGNOSTICS");
         refresh.setOnClickListener(v -> inspectRoblox());
         body.addView(refresh, buttonLp());
 
@@ -109,6 +110,17 @@ public class MobileVrActivationActivity extends ComponentActivity {
         return lp;
     }
 
+    private Intent getRobloxLauncher() {
+        return getPackageManager().getLaunchIntentForPackage(ROBLOX);
+    }
+
+    private String launcherName() {
+        Intent launch = getRobloxLauncher();
+        if (launch == null) return "NONE";
+        ComponentName c = launch.getComponent();
+        return c == null ? "implicit launcher" : c.flattenToShortString();
+    }
+
     private void inspectRoblox() {
         exported.clear();
         try {
@@ -121,24 +133,22 @@ public class MobileVrActivationActivity extends ComponentActivity {
                 }
             }
 
-            StringBuilder out = new StringBuilder();
             RobloxVrProbe.Result probe = RobloxVrProbe.inspect(this);
-            out.append("CLIENT: ").append(probe.verdict).append('\n');
-            out.append("All exported Activities: ").append(exported.size()).append('\n');
-
             int robloxOwnedCount = 0;
             for (ActivityInfo activity : exported) {
-                if (!isRobloxOwnedCandidate(activity)) continue;
-                robloxOwnedCount++;
-                if (robloxOwnedCount <= 10) {
-                    out.append("• ROBLOX: ").append(shortName(activity.name)).append('\n');
-                }
+                if (isRobloxOwnedCandidate(activity)) robloxOwnedCount++;
             }
-            out.append("Roblox-owned launch candidates: ").append(robloxOwnedCount).append('\n');
-            out.append("\nGoogle Play Games, ads, billing, login and other embedded SDK Activities are excluded from direct VR experiments.");
+
+            StringBuilder out = new StringBuilder();
+            out.append("CLIENT: ").append(probe.verdict).append('\n');
+            out.append("NORMAL LAUNCHER: ").append(launcherName()).append('\n');
+            out.append("ALL EXPORTED: ").append(exported.size()).append('\n');
+            out.append("ROBLOX-OWNED CANDIDATES: ").append(robloxOwnedCount).append('\n');
+            out.append("TRACKING: ").append(XrTrackingService.isRunning() ? "RUNNING" : "STOPPED").append('\n');
+            out.append("\nTest button 1 first. It sends ZERO VR extras and does not start the camera service.");
             status.setText(out.toString());
         } catch (PackageManager.NameNotFoundException error) {
-            status.setText("Roblox is not installed.");
+            status.setText("ROBLOX IS NOT INSTALLED.");
         }
     }
 
@@ -147,45 +157,53 @@ public class MobileVrActivationActivity extends ComponentActivity {
             if (!XrTrackingService.isRunning()) {
                 startForegroundService(new Intent(this, XrTrackingService.class));
             }
-        } catch (RuntimeException ignored) { }
+        } catch (RuntimeException error) {
+            status.setText("TRACKING COULD NOT START: " + error.getClass().getSimpleName());
+        }
     }
 
-    private Intent applyVrHints(Intent intent) {
-        String[] booleans = {
-                "isVrDevice", "isVRDevice", "VREnabled", "vrEnabled", "enableVR", "EnableVR",
-                "vr", "isVR", "isQuest", "quest", "oculus", "DebugEnableVREmulator",
-                "enableVRVirtualInput", "vrVirtualInput", "useOpenXR", "openXR", "openxr",
-                "nexa_xr_requested"
-        };
-        for (String key : booleans) intent.putExtra(key, true);
-        intent.putExtra("platform", "OculusQuest");
-        intent.putExtra("device", "Quest");
-        intent.putExtra("vrPlatform", "OculusQuest");
-        intent.putExtra("vrMode", "OpenXR");
-        intent.putExtra("nexa_xr_protocol", "nexa-xr-pose-v2");
-        intent.putExtra("nexa_xr_bridge", "tcp://127.0.0.1:" + XrTrackingService.BRIDGE_PORT);
-        return intent;
-    }
-
-    private void launchDefaultWithVrHints() {
-        startTracking();
-        Intent launch = getPackageManager().getLaunchIntentForPackage(ROBLOX);
+    private void launchClean() {
+        Intent launch = getRobloxLauncher();
         if (launch == null) {
-            status.setText("Default Roblox launch Activity not found.");
+            status.setText("NO ROBLOX LAUNCHER FOUND.");
             return;
         }
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        applyVrHints(launch);
-        status.setText("Launching the normal Roblox entry point with VR hints. If the client remains Mobile, these public Intent hints were ignored by Roblox.");
-        startActivity(launch);
+        status.setText("CLEAN LAUNCH → " + launcherName() + "\nNo VR extras. No NEXA tracking started.");
+        try {
+            startActivity(launch);
+        } catch (RuntimeException error) {
+            status.setText("CLEAN LAUNCH REJECTED: " + error.getClass().getSimpleName() + "\n" + error.getMessage());
+        }
+    }
+
+    private void applyMinimalVrHints(Intent intent) {
+        intent.putExtra("VREnabled", true);
+        intent.putExtra("isVrDevice", true);
+        intent.putExtra("DebugEnableVREmulator", true);
+    }
+
+    private void launchMinimalVr(boolean withTracking) {
+        Intent launch = getRobloxLauncher();
+        if (launch == null) {
+            status.setText("NO ROBLOX LAUNCHER FOUND.");
+            return;
+        }
+        if (withTracking) startTracking();
+        applyMinimalVrHints(launch);
+        status.setText("MINIMAL VR TEST → " + launcherName()
+                + "\nFlags: VREnabled + isVrDevice + DebugEnableVREmulator"
+                + "\nTracking: " + (withTracking ? "requested" : "OFF"));
+        try {
+            startActivity(launch);
+        } catch (RuntimeException error) {
+            status.setText("MINIMAL VR LAUNCH REJECTED: " + error.getClass().getSimpleName() + "\n" + error.getMessage());
+        }
     }
 
     private boolean isRobloxOwnedCandidate(ActivityInfo activity) {
         if (activity == null || activity.name == null || !activity.exported) return false;
         String n = activity.name.toLowerCase(Locale.US);
         if (!n.startsWith(ROBLOX_CLASS_PREFIX.toLowerCase(Locale.US))) return false;
-
-        // Exclude Roblox-owned utility surfaces that are clearly not game/client entry points.
         return !n.contains("notification")
                 && !n.contains("incomingcall")
                 && !n.contains("captcha")
@@ -225,42 +243,20 @@ public class MobileVrActivationActivity extends ComponentActivity {
                 best = activity;
             }
         }
-
         if (best == null) {
-            status.setText("NO ROBLOX-OWNED EXPORTED GAME ENTRY FOUND.\n\nThe previous v0.7 selected Google Play Games by mistake. This build refuses third-party Activities instead of opening the wrong component.");
+            status.setText("NO ROBLOX-OWNED EXPORTED GAME ENTRY FOUND.");
             return;
         }
 
-        startTracking();
         Intent direct = new Intent(Intent.ACTION_MAIN);
         direct.setComponent(new ComponentName(ROBLOX, best.name));
-        direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        applyVrHints(direct);
-        status.setText("Direct Roblox experiment: " + shortName(best.name)
-                + "\nScore: " + bestScore
-                + "\nVR hints attached. This only tests whether this public Roblox-owned entry point accepts them.");
+        applyMinimalVrHints(direct);
+        status.setText("DIRECT TEST → " + best.name + "\nScore: " + bestScore + "\nTracking OFF.");
         try {
             startActivity(direct);
         } catch (RuntimeException error) {
-            status.setText("ROBLOX DIRECT LAUNCH REJECTED: " + error.getClass().getSimpleName()
-                    + "\nComponent: " + shortName(best.name)
-                    + "\nThis public Activity is not a usable VR activation entry point.");
+            status.setText("DIRECT ENTRY REJECTED: " + error.getClass().getSimpleName()
+                    + "\nComponent: " + best.name);
         }
-    }
-
-    private void launchPlain() {
-        Intent launch = getPackageManager().getLaunchIntentForPackage(ROBLOX);
-        if (launch == null) {
-            status.setText("Roblox launch Activity not found.");
-            return;
-        }
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        startActivity(launch);
-    }
-
-    private String shortName(String name) {
-        if (name == null) return "?";
-        int index = name.lastIndexOf('.');
-        return index >= 0 ? name.substring(index + 1) : name;
     }
 }
