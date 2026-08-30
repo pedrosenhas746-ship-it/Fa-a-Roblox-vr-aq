@@ -17,8 +17,6 @@ import android.media.projection.MediaProjectionConfig;
 import android.media.projection.MediaProjectionManager;
 import android.view.Gravity;
 import android.view.View;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -38,8 +36,10 @@ public class CompatLauncherActivity extends ComponentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        enterImmersive();
         setContentView(buildUi());
+        // MIUI can return a broken/null WindowInsetsController before the DecorView is attached.
+        // Apply immersive flags only after the content view exists, using the legacy-compatible path.
+        handler.post(this::enterImmersive);
         ensureCameraAndTracking();
         refreshStatus();
     }
@@ -47,7 +47,7 @@ public class CompatLauncherActivity extends ComponentActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        enterImmersive();
+        handler.post(this::enterImmersive);
         refreshStatus();
         if (resumeCompatAfterOverlay && Settings.canDrawOverlays(this)) {
             resumeCompatAfterOverlay = false;
@@ -63,7 +63,7 @@ public class CompatLauncherActivity extends ComponentActivity {
         root.setBackgroundColor(Color.rgb(8, 9, 13));
 
         TextView title = new TextView(this);
-        title.setText("NEXA ROBLOX XR v0.7");
+        title.setText("NEXA ROBLOX XR v0.7.1");
         title.setTextColor(Color.WHITE);
         title.setTextSize(27f);
         title.setGravity(Gravity.CENTER);
@@ -107,7 +107,7 @@ public class CompatLauncherActivity extends ComponentActivity {
         root.addView(compat, buttonLp());
 
         TextView hint = new TextView(this);
-        hint.setText("v0.7 tries only public Android entry points in the installed Roblox Mobile build. It does not patch or inject into Roblox. VRBox Compat remains the fallback on Android 14+.");
+        hint.setText("v0.7.1 fixes MIUI startup crashes. Mobile VR activation still tests only public Android entry points in Roblox; VRBox Compat remains the fallback on Android 14+.");
         hint.setTextColor(Color.LTGRAY);
         hint.setTextSize(11f);
         hint.setGravity(Gravity.CENTER);
@@ -231,20 +231,20 @@ public class CompatLauncherActivity extends ComponentActivity {
     }
 
     private void enterImmersive() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsetsController c = getWindow().getInsetsController();
-            if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(
+        try {
+            View decor = getWindow() == null ? null : getWindow().getDecorView();
+            if (decor == null) return;
+            // Legacy flags are intentionally used on all Android versions here. They are deprecated,
+            // but remain supported and avoid a MIUI Android 12 PhoneWindow#getInsetsController NPE.
+            decor.setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                             | View.SYSTEM_UI_FLAG_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } catch (RuntimeException ignored) {
+            // Immersive mode is cosmetic; never let an OEM window bug crash the launcher.
         }
     }
 }
