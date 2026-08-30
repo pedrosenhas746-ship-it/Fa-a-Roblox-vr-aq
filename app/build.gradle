@@ -10,8 +10,8 @@ android {
         applicationId 'com.nexa.robloxvr'
         minSdk 26
         targetSdk 35
-        versionCode 9
-        versionName '0.7.2-exported-activity-fix'
+        versionCode 10
+        versionName '0.7.3-safe-launch-diagnostics'
     }
 
     compileOptions {
