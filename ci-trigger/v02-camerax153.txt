@@ -1,0 +1,1 @@
+Trigger CI after downgrading CameraX to 1.5.3 for SDK 35 / AGP 8.7.3 compatibility.
