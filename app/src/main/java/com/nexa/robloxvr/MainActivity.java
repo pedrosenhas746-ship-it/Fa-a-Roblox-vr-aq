@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -22,15 +23,15 @@ import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends ComponentActivity {
-    private static final String ROBLOX_PACKAGE = "com.roblox.client";
+    private static final String ROBLOX_PACKAGE = RobloxVrProbe.ROBLOX_PACKAGE;
     private static final String OPENXR_RUNTIME_ACTION = "org.khronos.openxr.OpenXRRuntimeService";
     private static final int CAMERA_REQUEST = 1102;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private StereoSurface stereoSurface;
-    private boolean robloxInstalled;
     private boolean permissionDenied;
-    private String openXrRuntime = "none";
+    private RobloxVrProbe.Result robloxProbe;
+    private RuntimeInfo runtimeInfo = RuntimeInfo.none();
 
     private final Runnable redrawLoop = new Runnable() {
         @Override
@@ -39,6 +40,25 @@ public class MainActivity extends ComponentActivity {
             ui.postDelayed(this, 16L);
         }
     };
+
+    private static final class RuntimeInfo {
+        final String packageName;
+        final String soFilename;
+        final int majorVersion;
+
+        RuntimeInfo(String packageName, String soFilename, int majorVersion) {
+            this.packageName = packageName;
+            this.soFilename = soFilename;
+            this.majorVersion = majorVersion;
+        }
+
+        static RuntimeInfo none() { return new RuntimeInfo("none", "", 0); }
+        boolean available() { return !"none".equals(packageName) && !"unknown".equals(packageName); }
+        String compact() {
+            if (!available()) return packageName;
+            return packageName + (majorVersion > 0 ? " • XR" + majorVersion : "");
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -70,8 +90,8 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void refreshEnvironment() {
-        robloxInstalled = detectRoblox();
-        openXrRuntime = detectOpenXrRuntime();
+        robloxProbe = RobloxVrProbe.inspect(this);
+        runtimeInfo = detectOpenXrRuntime();
     }
 
     private void ensureTrackingPermission() {
@@ -102,45 +122,80 @@ public class MainActivity extends ComponentActivity {
         } catch (RuntimeException ignored) { }
     }
 
-    private boolean detectRoblox() {
-        try {
-            getPackageManager().getPackageInfo(ROBLOX_PACKAGE, 0);
-            return true;
-        } catch (PackageManager.NameNotFoundException error) {
-            return false;
-        }
-    }
-
-    private String detectOpenXrRuntime() {
+    private RuntimeInfo detectOpenXrRuntime() {
         try {
             Intent query = new Intent(OPENXR_RUNTIME_ACTION);
-            List<ResolveInfo> runtimes = getPackageManager().queryIntentServices(query, PackageManager.MATCH_ALL);
-            if (runtimes == null || runtimes.isEmpty()) return "none";
+            List<ResolveInfo> runtimes = getPackageManager().queryIntentServices(query, PackageManager.GET_META_DATA);
+            if (runtimes == null || runtimes.isEmpty()) return RuntimeInfo.none();
             ResolveInfo best = runtimes.get(0);
-            if (best.serviceInfo != null && best.serviceInfo.packageName != null) {
-                return best.serviceInfo.packageName;
+            ServiceInfo service = best.serviceInfo;
+            if (service == null || service.packageName == null) return new RuntimeInfo("detected", "", 0);
+
+            String so = "";
+            int major = 0;
+            if (service.metaData != null) {
+                so = service.metaData.getString("org.khronos.openxr.OpenXRRuntime.SoFilename", "");
+                major = service.metaData.getInt("org.khronos.openxr.OpenXRRuntime.MajorVersion", 0);
             }
-            return "detected";
+            return new RuntimeInfo(service.packageName, so, major);
         } catch (RuntimeException ignored) {
-            return "unknown";
+            return new RuntimeInfo("unknown", "", 0);
         }
     }
 
-    private void launchRoblox() {
-        if (!robloxInstalled) {
-            stereoSurface.flashMessage = "ROBLOX ANDROID NOT INSTALLED";
+    private boolean readyForVrRoblox() {
+        return robloxProbe != null && robloxProbe.xrCapableClientLikely() && runtimeInfo.available();
+    }
+
+    private void launchRobloxVr() {
+        refreshEnvironment();
+        if (robloxProbe == null || !robloxProbe.installed) {
+            stereoSurface.flashMessage = "ROBLOX NOT INSTALLED";
             stereoSurface.invalidate();
             return;
         }
-        startTrackingService();
-        Intent launch = getPackageManager().getLaunchIntentForPackage(ROBLOX_PACKAGE);
-        if (launch != null) {
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            launch.putExtra("nexa_xr_requested", true);
-            launch.putExtra("nexa_xr_protocol", "nexa-xr-pose-v2");
-            launch.putExtra("nexa_xr_bridge", "tcp://127.0.0.1:" + XrTrackingService.BRIDGE_PORT);
-            startActivity(launch);
+        if (!runtimeInfo.available()) {
+            stereoSurface.flashMessage = "OPENXR RUNTIME MISSING";
+            stereoSurface.invalidate();
+            return;
         }
+        if (!robloxProbe.xrCapableClientLikely()) {
+            stereoSurface.flashMessage = "MOBILE ROBLOX DETECTED • QUEST/OPENXR BUILD REQUIRED";
+            stereoSurface.invalidate();
+            return;
+        }
+
+        startTrackingService();
+        warmRuntime();
+        stereoSurface.flashMessage = "STARTING OPENXR + ROBLOX VR…";
+        stereoSurface.invalidate();
+        ui.postDelayed(this::launchRobloxPackage, 650L);
+    }
+
+    private void warmRuntime() {
+        if (!runtimeInfo.available()) return;
+        try {
+            Intent runtimeLaunch = getPackageManager().getLaunchIntentForPackage(runtimeInfo.packageName);
+            if (runtimeLaunch != null) {
+                runtimeLaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                startActivity(runtimeLaunch);
+            }
+        } catch (RuntimeException ignored) { }
+    }
+
+    private void launchRobloxPackage() {
+        Intent launch = getPackageManager().getLaunchIntentForPackage(ROBLOX_PACKAGE);
+        if (launch == null) {
+            stereoSurface.flashMessage = "ROBLOX LAUNCH ACTIVITY NOT FOUND";
+            stereoSurface.invalidate();
+            return;
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        launch.putExtra("nexa_xr_requested", true);
+        launch.putExtra("nexa_xr_protocol", "nexa-xr-pose-v2");
+        launch.putExtra("nexa_xr_bridge", "tcp://127.0.0.1:" + XrTrackingService.BRIDGE_PORT);
+        launch.putExtra("nexa_openxr_runtime", runtimeInfo.packageName);
+        startActivity(launch);
     }
 
     private void enterImmersiveMode() {
@@ -268,28 +323,43 @@ public class MainActivity extends ComponentActivity {
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             paint.setColor(Color.WHITE);
-            paint.setTextSize(22f);
-            c.drawText("NEXA XR STACK v0.3", center, 31f, paint);
-            paint.setTextSize(14f);
-            c.drawText(String.format(Locale.US, "HEAD Y %.1f° P %.1f° R %.1f°", s.yaw, s.pitch, s.roll), center, 53f, paint);
-            c.drawText("HANDS " + s.hands.length + "/2 • " + s.camera.toUpperCase(Locale.US), center, 74f, paint);
-            c.drawText("BRIDGE CLIENTS " + s.bridgeClients + " • 127.0.0.1:" + XrTrackingService.BRIDGE_PORT, center, 95f, paint);
-            paint.setTextSize(12f);
+            paint.setTextSize(21f);
+            c.drawText("NEXA XR • QUEST CLIENT GATE v0.4", center, 29f, paint);
+            paint.setTextSize(13f);
+            c.drawText(String.format(Locale.US, "HEAD Y %.1f° P %.1f° R %.1f° • HANDS %d/2", s.yaw, s.pitch, s.roll, s.hands.length), center, 50f, paint);
+            c.drawText("CAM " + s.camera.toUpperCase(Locale.US) + " • BRIDGE CLIENTS " + s.bridgeClients, center, 70f, paint);
+
+            boolean runtimeOk = runtimeInfo.available();
+            paint.setColor(runtimeOk ? Color.rgb(150,255,170) : Color.rgb(255,165,120));
+            c.drawText("OPENXR RUNTIME: " + shorten(runtimeInfo.compact(), 48), center, 91f, paint);
+
+            boolean clientOk = robloxProbe != null && robloxProbe.xrCapableClientLikely();
+            paint.setColor(clientOk ? Color.rgb(150,255,170) : Color.rgb(255,145,145));
+            c.drawText("ROBLOX CLIENT: " + shorten(robloxProbe == null ? "probing…" : robloxProbe.verdict, 50), center, 112f, paint);
+
+            paint.setTextSize(11f);
             paint.setColor(Color.LTGRAY);
-            c.drawText(permissionDenied ? "CAMERA PERMISSION REQUIRED" : shorten(s.status, 58), center, 115f, paint);
-            paint.setColor("none".equals(openXrRuntime) ? Color.rgb(255, 175, 120) : Color.rgb(150, 255, 170));
-            c.drawText("OPENXR: " + shorten(openXrRuntime, 42), center, 135f, paint);
-            paint.setColor(robloxInstalled ? Color.rgb(150, 255, 170) : Color.rgb(255, 150, 150));
-            paint.setTextSize(14f);
-            c.drawText(robloxInstalled ? "ROBLOX DETECTED" : "ROBLOX NOT INSTALLED", center, getHeight() - 62f, paint);
+            if (robloxProbe != null && robloxProbe.installed) {
+                c.drawText("XRperm=" + robloxProbe.openXrPermission + " • headtracking=" + robloxProbe.vrHeadTrackingFeature +
+                        " • openxrLib=" + robloxProbe.openXrLibrary + " • metaVR=" + robloxProbe.metaVrLibrary,
+                        center, 130f, paint);
+            }
+
+            paint.setTextSize(13f);
+            paint.setColor(readyForVrRoblox() ? Color.rgb(150,255,170) : Color.rgb(255,205,125));
+            c.drawText(readyForVrRoblox() ? "XR CHAIN READY • TAP BOTTOM TO START" :
+                    "NEED BOTH: OPENXR RUNTIME + VR-CAPABLE ROBLOX CLIENT", center, getHeight() - 61f, paint);
+
             paint.setColor(Color.WHITE);
-            paint.setTextSize(15f);
-            c.drawText("TAP BOTTOM TO OPEN ROBLOX", center, getHeight() - 38f, paint);
-            paint.setTextSize(12f);
-            c.drawText("TAP TOP TO RECENTER", center, getHeight() - 18f, paint);
+            paint.setTextSize(14f);
+            c.drawText("TAP BOTTOM: START ROBLOX VR", center, getHeight() - 38f, paint);
+            paint.setTextSize(11f);
+            c.drawText("TAP TOP: RECENTER", center, getHeight() - 18f, paint);
+
             if (!flashMessage.isEmpty()) {
-                paint.setTextSize(19f);
-                c.drawText(flashMessage, center, getHeight() * 0.72f, paint);
+                paint.setTextSize(17f);
+                paint.setColor(Color.WHITE);
+                c.drawText(shorten(flashMessage, 62), center, getHeight() * 0.72f, paint);
             }
             paint.setTextAlign(Paint.Align.LEFT);
         }
@@ -322,12 +392,13 @@ public class MainActivity extends ComponentActivity {
             flashMessage = "";
             if (event.getY() < getHeight() * 0.28f) {
                 XrTrackingService.requestRecenter();
-                flashMessage = "RECENTERED";
+                refreshEnvironment();
+                flashMessage = "RECENTERED + XR ENV REFRESHED";
                 invalidate();
                 return true;
             }
             if (event.getY() > getHeight() * 0.68f) {
-                launchRoblox();
+                launchRobloxVr();
                 return true;
             }
             return true;
