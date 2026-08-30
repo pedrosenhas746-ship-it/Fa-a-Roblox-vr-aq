@@ -63,14 +63,14 @@ public class CompatLauncherActivity extends ComponentActivity {
         root.setBackgroundColor(Color.rgb(8, 9, 13));
 
         TextView title = new TextView(this);
-        title.setText("NEXA ROBLOX XR v0.5");
+        title.setText("NEXA ROBLOX XR v0.6");
         title.setTextColor(Color.WHITE);
         title.setTextSize(27f);
         title.setGravity(Gravity.CENTER);
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("QUEST XR PROBE + VRBOX COMPATIBILITY");
+        subtitle.setText("QUEST MODE + VRBOX COMPATIBILITY");
         subtitle.setTextColor(Color.LTGRAY);
         subtitle.setTextSize(14f);
         subtitle.setGravity(Gravity.CENTER);
@@ -86,7 +86,11 @@ public class CompatLauncherActivity extends ComponentActivity {
         statusLp.setMargins(0, 0, 0, 18);
         root.addView(status, statusLp);
 
-        Button prepare = button("1 • OPEN ROBLOX ONCE");
+        Button quest = button("QUEST / OPENXR MODE v0.6");
+        quest.setOnClickListener(v -> startActivity(new Intent(this, QuestSetupActivity.class)));
+        root.addView(quest, buttonLp());
+
+        Button prepare = button("1 • OPEN ROBLOX MOBILE ONCE");
         prepare.setOnClickListener(v -> launchRoblox());
         root.addView(prepare, buttonLp());
 
@@ -98,12 +102,8 @@ public class CompatLauncherActivity extends ComponentActivity {
         compat.setOnClickListener(v -> startCompatMode());
         root.addView(compat, buttonLp());
 
-        Button quest = button("QUEST / OPENXR EXPERIMENT");
-        quest.setOnClickListener(v -> startActivity(new Intent(this, MainActivity.class)));
-        root.addView(quest, buttonLp());
-
         TextView hint = new TextView(this);
-        hint.setText("Compat mode: Android 14+ • when Android asks what to share, choose ONLY ROBLOX. Then put the phone in the VRBox.");
+        hint.setText("Quest Mode requires a real VR/OpenXR Roblox build + an OpenXR runtime. Compat Mode works with the stock Mobile client on Android 14+.");
         hint.setTextColor(Color.LTGRAY);
         hint.setTextSize(12f);
         hint.setGravity(Gravity.CENTER);
@@ -230,7 +230,7 @@ public class CompatLauncherActivity extends ComponentActivity {
 
     private void refreshStatus() {
         String androidPart = "Android " + Build.VERSION.RELEASE
-                + (Build.VERSION.SDK_INT >= 34 ? " ✓ app-capture" : " ✗ needs 14+");
+                + (Build.VERSION.SDK_INT >= 34 ? " ✓ app-capture" : " ✗ compat needs 14+");
         String robloxPart = isRobloxInstalled() ? "Roblox ✓" : "Roblox ✗";
         String overlayPart = Settings.canDrawOverlays(this) ? "Overlay ✓" : "Overlay ✗";
         String accessPart = accessibilityEnabled() ? "Head/hand controls ✓" : "Head/hand controls ✗";
