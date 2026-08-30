@@ -30,6 +30,7 @@ import java.util.Locale;
  */
 public class MobileVrActivationActivity extends ComponentActivity {
     private static final String ROBLOX = RobloxVrProbe.ROBLOX_PACKAGE;
+    private static final String ROBLOX_CLASS_PREFIX = "com.roblox.client.";
     private TextView status;
     private final List<ActivityInfo> exported = new ArrayList<>();
 
@@ -48,14 +49,14 @@ public class MobileVrActivationActivity extends ComponentActivity {
         body.setBackgroundColor(Color.rgb(8, 9, 13));
 
         TextView title = new TextView(this);
-        title.setText("NEXA MOBILE VR ACTIVATION v0.7");
+        title.setText("NEXA MOBILE VR ACTIVATION v0.7.2");
         title.setTextColor(Color.WHITE);
         title.setTextSize(23f);
         title.setGravity(Gravity.CENTER);
         body.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView explain = new TextView(this);
-        explain.setText("Experimental: tries only public/exported Android launch paths in the installed Roblox Mobile client. No patching or injection.");
+        explain.setText("Experimental: tries only public/exported Roblox Android launch paths. Third-party Play Games/ads/login Activities are ignored.");
         explain.setTextColor(Color.LTGRAY);
         explain.setTextSize(12f);
         explain.setGravity(Gravity.CENTER);
@@ -73,7 +74,7 @@ public class MobileVrActivationActivity extends ComponentActivity {
         defaultLaunch.setOnClickListener(v -> launchDefaultWithVrHints());
         body.addView(defaultLaunch, buttonLp());
 
-        Button gameLaunch = button("2 • TRY EXPORTED GAME ACTIVITY");
+        Button gameLaunch = button("2 • TRY ROBLOX-OWNED EXPORTED ACTIVITY");
         gameLaunch.setOnClickListener(v -> launchBestExportedGameActivity());
         body.addView(gameLaunch, buttonLp());
 
@@ -123,12 +124,18 @@ public class MobileVrActivationActivity extends ComponentActivity {
             StringBuilder out = new StringBuilder();
             RobloxVrProbe.Result probe = RobloxVrProbe.inspect(this);
             out.append("CLIENT: ").append(probe.verdict).append('\n');
-            out.append("Exported Activities: ").append(exported.size()).append('\n');
-            int shown = Math.min(exported.size(), 10);
-            for (int i = 0; i < shown; i++) {
-                out.append("• ").append(shortName(exported.get(i).name)).append('\n');
+            out.append("All exported Activities: ").append(exported.size()).append('\n');
+
+            int robloxOwnedCount = 0;
+            for (ActivityInfo activity : exported) {
+                if (!isRobloxOwnedCandidate(activity)) continue;
+                robloxOwnedCount++;
+                if (robloxOwnedCount <= 10) {
+                    out.append("• ROBLOX: ").append(shortName(activity.name)).append('\n');
+                }
             }
-            out.append("\nThe uploaded Mobile build contains VRService/VR emulator JNI, but this screen can only test Android-visible entry points.");
+            out.append("Roblox-owned launch candidates: ").append(robloxOwnedCount).append('\n');
+            out.append("\nGoogle Play Games, ads, billing, login and other embedded SDK Activities are excluded from direct VR experiments.");
             status.setText(out.toString());
         } catch (PackageManager.NameNotFoundException error) {
             status.setText("Roblox is not installed.");
@@ -144,7 +151,6 @@ public class MobileVrActivationActivity extends ComponentActivity {
     }
 
     private Intent applyVrHints(Intent intent) {
-        // Candidate names found in / implied by the shipped mobile binary and common engine launch gates.
         String[] booleans = {
                 "isVrDevice", "isVRDevice", "VREnabled", "vrEnabled", "enableVR", "EnableVR",
                 "vr", "isVR", "isQuest", "quest", "oculus", "DebugEnableVREmulator",
@@ -170,30 +176,58 @@ public class MobileVrActivationActivity extends ComponentActivity {
         }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         applyVrHints(launch);
-        status.setText("Launching default Roblox Activity with VR hints. Test VR Hands / a VR experience. If Roblox still behaves as Mobile, this public launch path did not cross the internal VR gate.");
+        status.setText("Launching the normal Roblox entry point with VR hints. If the client remains Mobile, these public Intent hints were ignored by Roblox.");
         startActivity(launch);
+    }
+
+    private boolean isRobloxOwnedCandidate(ActivityInfo activity) {
+        if (activity == null || activity.name == null || !activity.exported) return false;
+        String n = activity.name.toLowerCase(Locale.US);
+        if (!n.startsWith(ROBLOX_CLASS_PREFIX.toLowerCase(Locale.US))) return false;
+
+        // Exclude Roblox-owned utility surfaces that are clearly not game/client entry points.
+        return !n.contains("notification")
+                && !n.contains("incomingcall")
+                && !n.contains("captcha")
+                && !n.contains("gmasdk")
+                && !n.contains("pushnotification")
+                && !n.contains("shortcut")
+                && !n.contains("widget")
+                && !n.contains("receiver");
+    }
+
+    private int candidateScore(ActivityInfo activity) {
+        String n = activity.name == null ? "" : activity.name.toLowerCase(Locale.US);
+        int score = 0;
+        if (n.endsWith("startup.maingameactivity")) score += 1000;
+        if (n.endsWith("activitynativemain")) score += 900;
+        if (n.endsWith("activityprotocollaunch")) score += 700;
+        if (n.endsWith("startup.activitysplash")) score += 500;
+        if (n.contains("maingameactivity")) score += 300;
+        if (n.contains("gameactivity")) score += 200;
+        if (n.contains("native")) score += 80;
+        if (n.contains("protocol")) score += 60;
+        if (n.contains("splash")) score += 40;
+        if (n.contains("main")) score += 20;
+        if (n.contains("web")) score -= 100;
+        return score;
     }
 
     private void launchBestExportedGameActivity() {
         inspectRoblox();
         ActivityInfo best = null;
         int bestScore = Integer.MIN_VALUE;
-        for (ActivityInfo a : exported) {
-            String n = a.name == null ? "" : a.name.toLowerCase(Locale.US);
-            int score = 0;
-            if (n.contains("maingameactivity")) score += 100;
-            if (n.contains("gameactivity")) score += 50;
-            if (n.contains("game")) score += 20;
-            if (n.contains("vr")) score += 40;
-            if (n.contains("quest")) score += 40;
-            if (n.contains("main")) score += 5;
+        for (ActivityInfo activity : exported) {
+            if (!isRobloxOwnedCandidate(activity)) continue;
+            int score = candidateScore(activity);
             if (score > bestScore) {
                 bestScore = score;
-                best = a;
+                best = activity;
             }
         }
+
         if (best == null) {
-            status.setText("No exported Roblox Activity is available for a direct experiment.");
+            status.setText("NO ROBLOX-OWNED EXPORTED GAME ENTRY FOUND.\n\nThe previous v0.7 selected Google Play Games by mistake. This build refuses third-party Activities instead of opening the wrong component.");
             return;
         }
 
@@ -202,11 +236,15 @@ public class MobileVrActivationActivity extends ComponentActivity {
         direct.setComponent(new ComponentName(ROBLOX, best.name));
         direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         applyVrHints(direct);
-        status.setText("Direct experiment: " + shortName(best.name) + "\nVR flags attached. If Android/Roblox rejects it, this Activity is not a usable public VR entry point.");
+        status.setText("Direct Roblox experiment: " + shortName(best.name)
+                + "\nScore: " + bestScore
+                + "\nVR hints attached. This only tests whether this public Roblox-owned entry point accepts them.");
         try {
             startActivity(direct);
         } catch (RuntimeException error) {
-            status.setText("Direct launch rejected: " + error.getClass().getSimpleName() + "\nThe component is exported but not a usable VR entry point.");
+            status.setText("ROBLOX DIRECT LAUNCH REJECTED: " + error.getClass().getSimpleName()
+                    + "\nComponent: " + shortName(best.name)
+                    + "\nThis public Activity is not a usable VR activation entry point.");
         }
     }
 
